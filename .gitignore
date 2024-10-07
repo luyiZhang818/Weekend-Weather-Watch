@@ -1,0 +1,42 @@
+# Node modules 
+node_modules/
+dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Production build 
+build/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+*.pyo
+
+# Virtual environments 
+venv/
+env/
+
+# Flask .env file 
+.env
+
+# IDE and OS Files
+.vscode/
+.idea/
+*.swp
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Docker
+.dockerignore
+docker-compose.yml
