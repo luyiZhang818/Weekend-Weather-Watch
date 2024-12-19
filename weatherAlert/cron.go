@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 	"weekendWeather/weather"
 
 	"github.com/go-redis/redis/v8"
@@ -43,17 +44,26 @@ func runDailyWeatherJob(redisClient *redis.Client) {
 	fmt.Println("Running daily weather job...")
 
 	allUserPreferences := getAllUserPreferences()
+	var wg sync.WaitGroup
 
 	// iterate through each user preference, fetch and send
 	for _, userPreferences := range allUserPreferences {
-		apiKey := os.Getenv("WEATHER_API_KEY")
-		_, recommendation, err := weather.FetchWeather(apiKey, userPreferences, redisClient)
-		if err != nil {
-			log.Println("Failed to fetch weather data:", err)
-			continue
-		}
-		sendWeatherRecommendation(recommendation, userPreferences)
+		wg.Add(1)
+
+		go func(userPreferences weather.UserPreferences) {
+			defer wg.Done()
+			apiKey := os.Getenv("WEATHER_API_KEY")
+			_, recommendation, err := weather.FetchWeather(apiKey, userPreferences, redisClient)
+			if err != nil {
+				log.Println("Failed to fetch weather data:", err)
+				continue
+			}
+			sendWeatherRecommendation(recommendation, userPreferences)
+		}(userPreferences)
 	}
+
+	wg.Wait()
+	fmt.Println("Daily weather job completed")
 }
 
 // gets list of UserPreferences type
