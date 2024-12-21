@@ -2,26 +2,25 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
-	"os"
-	"sync"
 	"weekendWeather/weather"
 
-	"github.com/go-redis/redis/v8"
 	"github.com/robfig/cron/v3"
+	"github.com/streadway/amqp"
 	"go.mongodb.org/mongo-driver/bson"
 )
 
 var c *cron.Cron
 
 // start daily check job every day at 9AM
-func StartCronJob(redisClient *redis.Client) {
-	c := cron.New()
+func StartCronJob() {
+	c = cron.New()
 
 	// schedule the job to run every day at 9AM
 	c.AddFunc("0 9 * * *", func() {
-		runDailyWeatherJob(redisClient)
+		runDailyWeatherJob()
 	})
 
 	// start the cron scheduler
@@ -40,30 +39,50 @@ func StopCronJob() {
 }
 
 // fetch weather and send sms for all users
-func runDailyWeatherJob(redisClient *redis.Client) {
+func runDailyWeatherJob() {
 	fmt.Println("Running daily weather job...")
 
 	allUserPreferences := getAllUserPreferences()
-	var wg sync.WaitGroup
 
 	// iterate through each user preference, fetch and send
 	for _, userPreferences := range allUserPreferences {
-		wg.Add(1)
-
-		go func(userPreferences weather.UserPreferences) {
-			defer wg.Done()
-			apiKey := os.Getenv("WEATHER_API_KEY")
-			_, recommendation, err := weather.FetchWeather(apiKey, userPreferences, redisClient)
-			if err != nil {
-				log.Println("Failed to fetch weather data:", err)
-				continue
-			}
-			sendWeatherRecommendation(recommendation, userPreferences)
-		}(userPreferences)
+		err := requestDailyWeatherData(userPreferences)
+		if err != nil {
+			log.Println("Failed to fetch weather data:", err)
+			return
+		}
 	}
 
-	wg.Wait()
 	fmt.Println("Daily weather job completed")
+}
+
+// send weather request data to rabbitmq queue
+func requestDailyWeatherData(userPreferences weather.UserPreferences) error {
+	message := weather.Message{
+		Action: "FetchWeather",
+		Data:   userPreferences,
+	}
+
+	body, err := json.Marshal(message)
+	if err != nil {
+		return fmt.Errorf("failed to marshal weather request: %v", err)
+	}
+
+	err = rabbitmqChannel.Publish(
+		"",
+		"weather_request_queue",
+		false,
+		false,
+		amqp.Publishing{
+			ContentType: "application/json",
+			Body:        body,
+		})
+	if err != nil {
+		return fmt.Errorf("failed to publish weather request: %v", err)
+	}
+
+	return nil
+
 }
 
 // gets list of UserPreferences type

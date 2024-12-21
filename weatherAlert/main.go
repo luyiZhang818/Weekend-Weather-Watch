@@ -48,7 +48,7 @@ func main() {
 	}
 
 	// automated SMS delivery for users in database
-	StartCronJob(shared.RedisClient)
+	StartCronJob()
 
 	// listen for weather changes
 	go consumeWeatherChanges()
