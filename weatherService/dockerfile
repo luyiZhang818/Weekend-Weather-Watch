@@ -1,0 +1,12 @@
+FROM golang:1.18-alpine
+WORKDIR /app
+
+# dependency
+COPY weatherService/go.mod weatherService/go.sum ./
+RUN go mod download
+
+# source code
+COPY ./weatherService .
+RUN go build -o weather-service .
+
+CMD ["./weather-service"]

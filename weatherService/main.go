@@ -1,30 +1,33 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"weatherService/fetch"
 	"weekendWeather/shared"
-	"weekendWeather/weather"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/joho/godotenv"
 	"github.com/streadway/amqp"
 )
 
 type Message struct {
-	Action string                  `json:"action"`
-	Data   weather.UserPreferences `json:"data"`
+	Action string                 `json:"action"`
+	Data   shared.UserPreferences `json:"data"`
 }
 
 type OutgoingMessage struct {
-	WeekendWeather  []weather.WeatherData   `json:"weekendWeather"`
-	Recommendation  string                  `json:"recommendation"`
-	UserPreferences weather.UserPreferences `json:"userPreferences"`
+	WeekendWeather  []shared.WeatherData   `json:"weekendWeather"`
+	Recommendation  string                 `json:"recommendation"`
+	UserPreferences shared.UserPreferences `json:"userPreferences"`
 }
 
 var rabbitmqConn *amqp.Connection
 var rabbitmqChannel *amqp.Channel
+var RedisClient *redis.Client
 
 func main() {
 	err := godotenv.Load()
@@ -34,7 +37,7 @@ func main() {
 
 	// initialize services
 	initRabbitMQ()
-	shared.InitRedis()
+	InitRedis()
 
 	go consumeWeatherChanges()
 
@@ -42,7 +45,7 @@ func main() {
 	<-forever
 
 	// shut down redis
-	err = shared.RedisClient.Close()
+	err = RedisClient.Close()
 	if err != nil {
 		log.Fatal("Redis disconnection error:", err)
 	}
@@ -81,9 +84,9 @@ func consumeWeatherChanges() {
 }
 
 // fetch data from api with redis caching
-func fetchAndProcessWeather(userPreferences weather.UserPreferences) {
+func fetchAndProcessWeather(userPreferences shared.UserPreferences) {
 	apiKey := os.Getenv("WEATHER_API_KEY")
-	weekendWeather, recommendation, err := weather.FetchWeather(apiKey, userPreferences, shared.RedisClient)
+	weekendWeather, recommendation, err := fetch.FetchWeather(apiKey, userPreferences, RedisClient)
 	if err != nil {
 		log.Printf("Failed to fetch weather data for user: %v", err)
 		return
@@ -93,7 +96,7 @@ func fetchAndProcessWeather(userPreferences weather.UserPreferences) {
 }
 
 // send message back - sending weekendweather, recommendation and userpreferences
-func sendWeatherUpdate(weekendWeather []weather.WeatherData, recommendation string, userPreferences weather.UserPreferences) {
+func sendWeatherUpdate(weekendWeather []shared.WeatherData, recommendation string, userPreferences shared.UserPreferences) {
 	updateMessage := OutgoingMessage{
 		WeekendWeather:  weekendWeather,
 		Recommendation:  recommendation,
@@ -118,6 +121,26 @@ func sendWeatherUpdate(weekendWeather []weather.WeatherData, recommendation stri
 	if err != nil {
 		log.Printf("Failed to publish weather update: %s", err)
 	}
+}
+
+// initialize Redis
+func InitRedis() {
+	redisAddr := os.Getenv("REDIS_ADDR")
+	RedisClient = redis.NewClient(&redis.Options{
+		Addr:     redisAddr,
+		Password: "",
+		DB:       0,
+	})
+
+	ctx := context.Background()
+
+	// check connection
+	_, err := RedisClient.Ping(ctx).Result()
+	if err != nil {
+		log.Fatal("Could not connect to Redis:", err)
+	}
+
+	fmt.Println("Connected to Redis!")
 }
 
 // initialize rabitMQ

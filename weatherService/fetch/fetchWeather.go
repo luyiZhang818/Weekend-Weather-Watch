@@ -1,4 +1,4 @@
-package weather
+package fetch
 
 import (
 	"context"
@@ -7,39 +7,15 @@ import (
 	"log"
 	"net/http"
 	"time"
+	"weekendWeather/shared"
 
 	"github.com/go-redis/redis/v8"
 )
 
-// structure to return sat and sun weather
-type WeatherData struct {
-	AvgTemp   float64 `json:"temp"`
-	MinTemp   float64 `json:"min_temp"`
-	MaxTemp   float64 `json:"max_temp"`
-	Condition string  `json:"condition"`
-	DayOfWeek string  `json:"day_of_week"`
-}
-
-// user specific settings
-type UserPreferences struct {
-	UserId                  string   `json:"userId"`
-	ZipCode                 string   `json:"zipcode"`
-	PreferredTemperatureMin float64  `json:"preferred_temperature_min"`
-	PreferredTemperatureMax float64  `json:"preferred_temperature_max"`
-	PreferredConditions     []string `json:"preferred_conditions"`
-	PhoneNumber             string   `json:"phone_number"`
-}
-
-// message structure for RabbitMQ communication
-type Message struct {
-	Action string          `json:"action"`
-	Data   UserPreferences `json:"data"`
-}
-
 var ctx = context.Background()
 
 // fetch weather from API and cache in redis
-func FetchWeather(apiKey string, userPreferences UserPreferences, redisClient *redis.Client) ([]WeatherData, string, error) {
+func FetchWeather(apiKey string, userPreferences shared.UserPreferences, redisClient *redis.Client) ([]shared.WeatherData, string, error) {
 	zipCode := userPreferences.ZipCode
 	redisKey := "weather:" + zipCode
 
@@ -71,7 +47,7 @@ func FetchWeather(apiKey string, userPreferences UserPreferences, redisClient *r
 
 	// otherwise cache hit
 	log.Println("Cache hit. Returning cached data.")
-	var weekendWeather []WeatherData
+	var weekendWeather []shared.WeatherData
 	json.Unmarshal([]byte(cachedWeather), &weekendWeather)
 
 	recommendation := GenerateRecommendation(weekendWeather, userPreferences)
@@ -79,7 +55,7 @@ func FetchWeather(apiKey string, userPreferences UserPreferences, redisClient *r
 }
 
 // fetch from api
-func FetchWeatherFromAPI(apiKey string, userPreferences UserPreferences) ([]WeatherData, string, error) {
+func FetchWeatherFromAPI(apiKey string, userPreferences shared.UserPreferences) ([]shared.WeatherData, string, error) {
 	zipCode := userPreferences.ZipCode
 	apiURL := fmt.Sprintf("https://api.weatherapi.com/v1/forecast.json?key=%s&q=%s&days=7", apiKey, zipCode)
 
@@ -118,7 +94,7 @@ func FetchWeatherFromAPI(apiKey string, userPreferences UserPreferences) ([]Weat
 	}
 
 	// set up the return data
-	var weekendWeather []WeatherData
+	var weekendWeather []shared.WeatherData
 	for _, day := range forecastData.Forecast.ForecastDay {
 		// parse date into yyyy-mm-dd
 		forecastDate, err := time.Parse("2006-01-02", day.Date)
@@ -127,7 +103,7 @@ func FetchWeatherFromAPI(apiKey string, userPreferences UserPreferences) ([]Weat
 		}
 		// find the immediate weekend
 		if forecastDate.Weekday() == time.Saturday {
-			weekendWeather = append(weekendWeather, WeatherData{
+			weekendWeather = append(weekendWeather, shared.WeatherData{
 				AvgTemp:   (day.Day.MaxTemp + day.Day.MinTemp) / 2,
 				MinTemp:   (day.Day.MinTemp),
 				MaxTemp:   (day.Day.MaxTemp),
@@ -137,7 +113,7 @@ func FetchWeatherFromAPI(apiKey string, userPreferences UserPreferences) ([]Weat
 		}
 
 		if forecastDate.Weekday() == time.Sunday {
-			weekendWeather = append(weekendWeather, WeatherData{
+			weekendWeather = append(weekendWeather, shared.WeatherData{
 				AvgTemp:   (day.Day.MaxTemp + day.Day.MinTemp) / 2,
 				MinTemp:   (day.Day.MinTemp),
 				MaxTemp:   (day.Day.MaxTemp),
@@ -158,10 +134,10 @@ func FetchWeatherFromAPI(apiKey string, userPreferences UserPreferences) ([]Weat
 }
 
 // generate string recommendation based on the weather data and user preferences provided
-func GenerateRecommendation(weekendWeather []WeatherData, userPreferences UserPreferences) string {
+func GenerateRecommendation(weekendWeather []shared.WeatherData, userPreferences shared.UserPreferences) string {
 
 	// separate weather data
-	var SatWeather, SunWeather WeatherData
+	var SatWeather, SunWeather shared.WeatherData
 	for _, weather := range weekendWeather {
 		if weather.DayOfWeek == "Saturday" {
 			SatWeather = weather

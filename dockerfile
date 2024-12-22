@@ -1,9 +1,0 @@
-FROM golang:1.18-alpine
-WORKDIR /app
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN ls -la /app
-RUN go build -o main .
-EXPOSE 8081
-CMD ["./main"]
