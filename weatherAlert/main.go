@@ -10,15 +10,13 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-	"weekendWeather/shared"
+	"weatherAlert/cron"
 
 	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
-	"github.com/robfig/cron/v3"
 	"github.com/streadway/amqp"
 	"github.com/twilio/twilio-go"
 	openapi "github.com/twilio/twilio-go/rest/api/v2010"
-	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -26,7 +24,31 @@ import (
 var mongoClient *mongo.Client
 var rabbitmqConn *amqp.Connection
 var rabbitmqChannel *amqp.Channel
-var c *cron.Cron
+
+// structure to return sat and sun weather
+type WeatherData struct {
+	AvgTemp   float64 `json:"temp"`
+	MinTemp   float64 `json:"min_temp"`
+	MaxTemp   float64 `json:"max_temp"`
+	Condition string  `json:"condition"`
+	DayOfWeek string  `json:"day_of_week"`
+}
+
+// user specific settings
+type UserPreferences struct {
+	UserId                  string   `json:"userId"`
+	ZipCode                 string   `json:"zipcode"`
+	PreferredTemperatureMin float64  `json:"preferred_temperature_min"`
+	PreferredTemperatureMax float64  `json:"preferred_temperature_max"`
+	PreferredConditions     []string `json:"preferred_conditions"`
+	PhoneNumber             string   `json:"phone_number"`
+}
+
+// message structure for RabbitMQ communication
+type Message struct {
+	Action string          `json:"action"`
+	Data   UserPreferences `json:"data"`
+}
 
 func main() {
 	err := godotenv.Load()
@@ -37,6 +59,7 @@ func main() {
 	// initialize services
 	initMongoDB()
 	initRabbitMQ()
+	cron.InitCron(mongoClient, rabbitmqChannel)
 
 	// set up router to handle POST requests to /preferences
 	router := mux.NewRouter()
@@ -49,7 +72,7 @@ func main() {
 	}
 
 	// automated SMS delivery for users in database
-	StartCronJob()
+	cron.StartCronJob()
 
 	// listen for weather changes
 	go consumeWeatherChanges()
@@ -70,7 +93,7 @@ func main() {
 	fmt.Println("Shutting down server")
 
 	// shut down cron job
-	StopCronJob()
+	cron.StopCronJob()
 
 	// shut down http server (5s)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -95,7 +118,7 @@ func main() {
 
 // stores user preference, fetches initial weather data based on the preference
 func handleUserPreferences(w http.ResponseWriter, r *http.Request) {
-	var userPreferences shared.UserPreferences
+	var userPreferences UserPreferences
 
 	// parse
 	err := json.NewDecoder(r.Body).Decode(&userPreferences)
@@ -121,8 +144,8 @@ func handleUserPreferences(w http.ResponseWriter, r *http.Request) {
 }
 
 // creates a message requesting weather data for a userpreference and publishes to rabbitMQ queue
-func requestWeatherData(userPreferences shared.UserPreferences) {
-	message := shared.Message{
+func requestWeatherData(userPreferences UserPreferences) {
+	message := Message{
 		Action: "FetchWeather",
 		Data:   userPreferences,
 	}
@@ -167,9 +190,9 @@ func consumeWeatherChanges() {
 	go func() {
 		for d := range messages {
 			var updateMessage struct {
-				WeekendWeather  []shared.WeatherData   `json:"weekendWeather"`
-				Recommendation  string                 `json:"recommendation"`
-				UserPreferences shared.UserPreferences `json:"userPreferences"`
+				WeekendWeather  []WeatherData   `json:"weekendWeather"`
+				Recommendation  string          `json:"recommendation"`
+				UserPreferences UserPreferences `json:"userPreferences"`
 			}
 			err := json.Unmarshal(d.Body, &updateMessage)
 			if err != nil {
@@ -185,7 +208,7 @@ func consumeWeatherChanges() {
 }
 
 // process received weather data and send updates accordingly
-func processWeatherUpdate(weekendWeather []shared.WeatherData, recommendation string, userPreferences shared.UserPreferences) {
+func processWeatherUpdate(weekendWeather []WeatherData, recommendation string, userPreferences UserPreferences) {
 	for _, weatherData := range weekendWeather {
 		log.Printf("Weather for %s: %+v", weatherData.DayOfWeek, weatherData)
 	}
@@ -194,7 +217,7 @@ func processWeatherUpdate(weekendWeather []shared.WeatherData, recommendation st
 }
 
 // send recommendation via SMS through Twilio
-func sendWeatherRecommendation(recommendation string, userPreferences shared.UserPreferences) {
+func sendWeatherRecommendation(recommendation string, userPreferences UserPreferences) {
 	// initialize Twilio client
 	TwilioClient := twilio.NewRestClientWithParams(twilio.ClientParams{
 		Username: os.Getenv("TWILIO_ACCOUNT_SID"),
@@ -274,103 +297,4 @@ func closeRabbitMQ() {
 	if rabbitmqConn != nil {
 		rabbitmqConn.Close()
 	}
-}
-
-/* ----------------------- CRON ------------------------*/
-// start daily check job every day at 9AM
-func StartCronJob() {
-	c = cron.New()
-
-	// schedule the job to run every day at 9AM
-	c.AddFunc("0 9 * * *", func() {
-		runDailyWeatherJob()
-	})
-
-	// start the cron scheduler
-	c.Start()
-	fmt.Println("Cron scheduler started. Running daily tasks at 9 AM.")
-}
-
-// graceful shutdown for cron job
-func StopCronJob() {
-	if c != nil {
-		ctx := context.Background()
-		c.Stop()
-		fmt.Println("Cron scheduler stopped.")
-		<-ctx.Done()
-	}
-}
-
-// fetch weather and send sms for all users
-func runDailyWeatherJob() {
-	fmt.Println("Running daily weather job...")
-
-	allUserPreferences := getAllUserPreferences()
-
-	// iterate through each user preference, fetch and send
-	for _, userPreferences := range allUserPreferences {
-		err := requestDailyWeatherData(userPreferences)
-		if err != nil {
-			log.Println("Failed to fetch weather data:", err)
-			return
-		}
-	}
-
-	fmt.Println("Daily weather job completed")
-}
-
-// send weather request data to rabbitmq queue
-func requestDailyWeatherData(userPreferences shared.UserPreferences) error {
-	message := shared.Message{
-		Action: "FetchWeather",
-		Data:   userPreferences,
-	}
-
-	body, err := json.Marshal(message)
-	if err != nil {
-		return fmt.Errorf("failed to marshal weather request: %v", err)
-	}
-
-	err = rabbitmqChannel.Publish(
-		"",
-		"weather_request_queue",
-		false,
-		false,
-		amqp.Publishing{
-			ContentType: "application/json",
-			Body:        body,
-		})
-	if err != nil {
-		return fmt.Errorf("failed to publish weather request: %v", err)
-	}
-
-	return nil
-
-}
-
-// gets list of UserPreferences type
-func getAllUserPreferences() []shared.UserPreferences {
-	var allUserPreferences []shared.UserPreferences
-
-	collection := mongoClient.Database("weekendweatherdb").Collection("user_preferences")
-
-	// get all docs
-	cursor, err := collection.Find(context.Background(), bson.M{})
-	if err != nil {
-		log.Println("Failed to fetch user preferences:", err)
-		return allUserPreferences
-	}
-	defer cursor.Close(context.Background())
-
-	// iterate over documents returned and add to list of UserPreferences
-	for cursor.Next(context.Background()) {
-		var preference shared.UserPreferences
-		err := cursor.Decode(&preference)
-		if err != nil {
-			log.Println("Failed to decode user preferences:", err)
-		}
-		allUserPreferences = append(allUserPreferences, preference)
-	}
-
-	return allUserPreferences
 }

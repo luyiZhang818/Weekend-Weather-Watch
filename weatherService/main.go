@@ -157,7 +157,7 @@ func initRabbitMQ() {
 	}
 
 	_, err = rabbitmqChannel.QueueDeclare(
-		"weather_data_queue",
+		"weather_request_queue",
 		false,
 		false,
 		false,
@@ -165,7 +165,7 @@ func initRabbitMQ() {
 		nil,
 	)
 	if err != nil {
-		log.Fatalf("Failed to declare a queue: %s", err)
+		log.Fatalf("Failed to declare weather_request_queue: %s", err)
 	}
 
 	fmt.Println("Connected to RabbitMQ!")
